@@ -1,0 +1,922 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ARQ协议可视化仿真系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        primary: '#3b82f6',
+                        secondary: '#10b981',
+                        danger: '#ef4444',
+                        warning: '#f59e0b',
+                        info: '#06b6d4',
+                        dark: '#1e293b'
+                    }
+                }
+            }
+        }
+    </script>
+    <style>
+        @keyframes frameMove {
+            0% { left: 100px; }
+            100% { left: calc(100% - 200px); }
+        }
+        @keyframes ackMove {
+            0% { left: calc(100% - 200px); }
+            100% { left: 100px; }
+        }
+        @keyframes flash {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.3; }
+        }
+        .frame {
+            animation: frameMove 3s linear forwards;
+        }
+        .ack {
+            animation: ackMove 2s linear forwards;
+        }
+        .flash {
+            animation: flash 0.5s 3;
+        }
+        .protocol-diagram {
+            height: 300px;
+            background: linear-gradient(to bottom, #f0f9ff, #e0f2fe);
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+        .sender, .receiver {
+            position: absolute;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 80px;
+            height: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 8px;
+            font-weight: bold;
+            color: white;
+        }
+        .sender {
+            left: 10px;
+            background-color: #3b82f6;
+        }
+        .receiver {
+            right: 10px;
+            background-color: #10b981;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        .window-frame {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 2px solid #cbd5e1;
+            margin: 0 5px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        .window-frame.active {
+            border-color: #3b82f6;
+            background-color: #dbeafe;
+        }
+        .window-frame.acked {
+            border-color: #10b981;
+            background-color: #dcfce7;
+        }
+        .window-frame.lost {
+            border-color: #ef4444;
+            background-color: #fee2e2;
+        }
+        .timeline {
+            position: absolute;
+            top: 50%;
+            left: 100px;
+            right: 100px;
+            height: 2px;
+            background-color: #cbd5e1;
+            transform: translateY(-50%);
+        }
+        .progress-bar {
+            height: 8px;
+            border-radius: 4px;
+            background-color: #e2e8f0;
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #3b82f6;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <header class="text-center mb-12">
+            <h1 class="text-4xl font-bold text-primary mb-2">ARQ协议可视化仿真系统</h1>
+            <p class="text-lg text-gray-600 max-w-3xl mx-auto">
+                交互式演示停止等待ARQ、返回N帧ARQ和选择重传ARQ三种协议的运行机制，支持丢帧模拟和参数调整
+            </p>
+        </header>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            <!-- 控制面板 -->
+            <div class="bg-white rounded-xl shadow-md p-6">
+                <h2 class="text-xl font-semibold text-dark mb-4 flex items-center">
+                    <i class="fas fa-sliders-h mr-2"></i> 控制面板
+                </h2>
+                
+                <div class="space-y-5">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">选择协议</label>
+                        <div class="grid grid-cols-3 gap-2">
+                            <button id="stop-wait-btn" class="protocol-btn bg-primary text-white py-2 px-3 rounded-md text-sm font-medium transition-colors">
+                                停止等待ARQ
+                            </button>
+                            <button id="go-back-n-btn" class="protocol-btn bg-gray-200 py-2 px-3 rounded-md text-sm font-medium transition-colors">
+                                返回N帧ARQ
+                            </button>
+                            <button id="selective-repeat-btn" class="protocol-btn bg-gray-200 py-2 px-3 rounded-md text-sm font-medium transition-colors">
+                                选择重传ARQ
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">窗口设置</label>
+                        <div class="flex items-center space-x-3">
+                            <span class="text-sm text-gray-500">发送窗口大小</span>
+                            <input type="range" min="1" max="8" value="4" class="w-full" id="window-size">
+                            <span id="window-size-value" class="text-sm font-medium w-8">4</span>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">传输参数</label>
+                        <div class="space-y-3">
+                            <div class="flex items-center space-x-3">
+                                <span class="text-sm text-gray-500 w-32">帧传输延迟 (ms)</span>
+                                <input type="range" min="500" max="3000" value="1500" step="100" class="w-full" id="frame-delay">
+                                <span id="frame-delay-value" class="text-sm font-medium w-12">1500</span>
+                            </div>
+                            <div class="flex items-center space-x-3">
+                                <span class="text-sm text-gray-500 w-32">超时时间 (ms)</span>
+                                <input type="range" min="1000" max="5000" value="2500" step="100" class="w-full" id="timeout">
+                                <span id="timeout-value" class="text-sm font-medium w-12">2500</span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">帧操作</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <button id="drop-data-btn" class="bg-warning text-white py-2 px-3 rounded-md text-sm font-medium flex items-center justify-center transition-colors hover:bg-amber-600">
+                                <i class="fas fa-ban mr-2"></i> 丢弃数据帧
+                            </button>
+                            <button id="drop-ack-btn" class="bg-warning text-white py-2 px-3 rounded-md text-sm font-medium flex items-center justify-center transition-colors hover:bg-amber-600">
+                                <i class="fas fa-ban mr-2"></i> 丢弃确认帧
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">仿真控制</label>
+                        <div class="grid grid-cols-4 gap-2">
+                            <button id="start-btn" class="bg-primary text-white py-2 px-3 rounded-md text-sm font-medium flex items-center justify-center transition-colors hover:bg-blue-600">
+                                <i class="fas fa-play mr-1"></i> 开始
+                            </button>
+                            <button id="pause-btn" class="bg-secondary text-white py-2 px-3 rounded-md text-sm font-medium flex items-center justify-center transition-colors hover:bg-emerald-600">
+                                <i class="fas fa-pause mr-1"></i> 暂停
+                            </button>
+                            <button id="step-btn" class="bg-info text-white py-2 px-3 rounded-md text-sm font-medium flex items-center justify-center transition-colors hover:bg-cyan-600">
+                                <i class="fas fa-step-forward mr-1"></i> 单步
+                            </button>
+                            <button id="reset-btn" class="bg-danger text-white py-2 px-3 rounded-md text-sm font-medium flex items-center justify-center transition-colors hover:bg-red-600">
+                                <i class="fas fa-redo mr-1"></i> 重置
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div class="pt-2">
+                        <button id="demo-btn" class="w-full bg-purple-600 text-white py-2 px-3 rounded-md text-sm font-medium flex items-center justify-center transition-colors hover:bg-purple-700">
+                            <i class="fas fa-bolt mr-2"></i> 快速演示 (返回N帧ARQ + 丢帧)
+                        </button>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- 协议可视化区域 -->
+            <div class="lg:col-span-2 bg-white rounded-xl shadow-md p-6">
+                <h2 class="text-xl font-semibold text-dark mb-4 flex items-center">
+                    <i class="fas fa-project-diagram mr-2"></i> 协议可视化
+                </h2>
+                
+                <div class="protocol-diagram mb-6" id="diagram">
+                    <div class="timeline"></div>
+                    <div class="sender">发送方</div>
+                    <div class="receiver">接收方</div>
+                    <div id="frames-container" class="absolute top-0 left-0 w-full h-full"></div>
+                </div>
+                
+                <div class="mb-6">
+                    <h3 class="text-lg font-medium text-gray-800 mb-3">滑动窗口状态</h3>
+                    <div id="window-state" class="flex justify-center items-center p-3 bg-gray-50 rounded-lg">
+                        <div class="text-center text-gray-500">选择协议并开始仿真以查看窗口状态</div>
+                    </div>
+                </div>
+                
+                <div class="mb-4">
+                    <h3 class="text-lg font-medium text-gray-800 mb-3">传输进度</h3>
+                    <div class="progress-bar">
+                        <div id="progress-fill" class="progress-fill" style="width: 0%"></div>
+                    </div>
+                </div>
+                
+                <div>
+                    <h3 class="text-lg font-medium text-gray-800 mb-3">当前状态</h3>
+                    <div id="current-state" class="text-center p-3 bg-blue-50 text-blue-700 rounded-lg">
+                        系统准备就绪，请选择协议并开始仿真
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 统计信息面板 -->
+        <div class="bg-white rounded-xl shadow-md p-6 mt-8">
+            <h2 class="text-xl font-semibold text-dark mb-4 flex items-center">
+                <i class="fas fa-chart-bar mr-2"></i> 统计信息
+            </h2>
+            
+            <div class="stats-grid mb-4">
+                <div class="bg-blue-50 p-4 rounded-lg flex flex-col items-center">
+                    <div class="text-3xl font-bold text-primary" id="sent-frames">0</div>
+                    <div class="text-sm text-gray-600 mt-1">发送帧数</div>
+                </div>
+                <div class="bg-green-50 p-4 rounded-lg flex flex-col items-center">
+                    <div class="text-3xl font-bold text-secondary" id="received-frames">0</div>
+                    <div class="text-sm text-gray-600 mt-1">接收帧数</div>
+                </div>
+                <div class="bg-amber-50 p-4 rounded-lg flex flex-col items-center">
+                    <div class="text-3xl font-bold text-warning" id="retransmitted-frames">0</div>
+                    <div class="text-sm text-gray-600 mt-1">重传帧数</div>
+                </div>
+                <div class="bg-cyan-50 p-4 rounded-lg flex flex-col items-center">
+                    <div class="text-3xl font-bold text-info" id="throughput">0</div>
+                    <div class="text-sm text-gray-600 mt-1">吞吐量 (帧/秒)</div>
+                </div>
+            </div>
+            
+            <div class="bg-gray-50 p-4 rounded-lg">
+                <h3 class="text-md font-medium text-gray-800 mb-2">协议说明</h3>
+                <div id="protocol-description" class="text-sm text-gray-600">
+                    <p class="mb-2"><span class="font-medium">停止等待ARQ</span>：发送方每发送一帧后必须等待接收方的确认帧，才能发送下一帧。</p>
+                    <p class="mb-2"><span class="font-medium">返回N帧ARQ</span>：发送方可以连续发送多个帧，接收方采用累积确认。当发生错误时，发送方回退N个帧重传。</p>
+                    <p><span class="font-medium">选择重传ARQ</span>：接收方可以缓存乱序到达的帧，发送方仅重传出错或丢失的帧，不需要回退重传。</p>
+                </div>
+            </div>
+        </div>
+        
+        <!-- 操作说明 -->
+        <div class="bg-white rounded-xl shadow-md p-6 mt-8">
+            <h2 class="text-xl font-semibold text-dark mb-4 flex items-center">
+                <i class="fas fa-info-circle mr-2"></i> 使用说明
+            </h2>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="bg-indigo-50 p-4 rounded-lg">
+                    <h3 class="font-medium text-indigo-700 mb-2"><i class="fas fa-mouse-pointer mr-2"></i>基本操作</h3>
+                    <ul class="text-sm text-gray-700 space-y-1">
+                        <li>1. 选择要演示的协议类型</li>
+                        <li>2. 调整窗口大小和传输参数</li>
+                        <li>3. 点击"开始"按钮启动仿真</li>
+                        <li>4. 在传输过程中可丢弃数据帧或确认帧</li>
+                        <li>5. 观察协议如何处理丢帧情况</li>
+                    </ul>
+                </div>
+                
+                <div class="bg-rose-50 p-4 rounded-lg">
+                    <h3 class="font-medium text-rose-700 mb-2"><i class="fas fa-vial mr-2"></i>测试场景</h3>
+                    <ul class="text-sm text-gray-700 space-y-1">
+                        <li>• 正常传输：观察协议的标准工作流程</li>
+                        <li>• 数据帧丢失：点击"丢弃数据帧"按钮模拟数据帧丢失</li>
+                        <li>• 确认帧丢失：点击"丢弃确认帧"按钮模拟ACK丢失</li>
+                        <li>• 快速演示：自动运行返回N帧ARQ的丢帧场景</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // 仿真状态
+        const state = {
+            currentProtocol: 'stop-wait',
+            running: false,
+            paused: false,
+            frameDelay: 1500,
+            timeout: 3000,
+            windowSize: 4,
+            nextSeq: 0,
+            baseSeq: 0,
+            ackExpected: 0,
+            frames: [],
+            acks: [],
+            sentFrames: 0,
+            receivedFrames: 0,
+            retransmittedFrames: 0,
+            startTime: 0,
+            timers: {}
+        };
+
+        // DOM元素
+        const elements = {
+            diagram: document.getElementById('diagram'),
+            framesContainer: document.getElementById('frames-container'),
+            windowState: document.getElementById('window-state'),
+            currentState: document.getElementById('current-state'),
+            progressFill: document.getElementById('progress-fill'),
+            sentFrames: document.getElementById('sent-frames'),
+            receivedFrames: document.getElementById('received-frames'),
+            retransmittedFrames: document.getElementById('retransmitted-frames'),
+            throughput: document.getElementById('throughput'),
+            protocolDescription: document.getElementById('protocol-description')
+        };
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            // 协议按钮事件
+            document.querySelectorAll('.protocol-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    document.querySelectorAll('.protocol-btn').forEach(b => {
+                        b.classList.remove('bg-primary', 'text-white');
+                        b.classList.add('bg-gray-200');
+                    });
+                    btn.classList.remove('bg-gray-200');
+                    btn.classList.add('bg-primary', 'text-white');
+                    
+                    if(btn.id === 'stop-wait-btn') {
+                        state.currentProtocol = 'stop-wait';
+                        updateProtocolDescription();
+                    } else if(btn.id === 'go-back-n-btn') {
+                        state.currentProtocol = 'go-back-n';
+                        updateProtocolDescription();
+                    } else if(btn.id === 'selective-repeat-btn') {
+                        state.currentProtocol = 'selective-repeat';
+                        updateProtocolDescription();
+                    }
+                    
+                    resetSimulation();
+                });
+            });
+
+            // 参数控制事件
+            document.getElementById('window-size').addEventListener('input', (e) => {
+                state.windowSize = parseInt(e.target.value);
+                document.getElementById('window-size-value').textContent = state.windowSize;
+            });
+
+            document.getElementById('frame-delay').addEventListener('input', (e) => {
+                state.frameDelay = parseInt(e.target.value);
+                document.getElementById('frame-delay-value').textContent = state.frameDelay;
+            });
+
+            document.getElementById('timeout').addEventListener('input', (e) => {
+                state.timeout = parseInt(e.target.value);
+                document.getElementById('timeout-value').textContent = state.timeout;
+            });
+
+            // 控制按钮事件
+            document.getElementById('start-btn').addEventListener('click', startSimulation);
+            document.getElementById('pause-btn').addEventListener('click', pauseSimulation);
+            document.getElementById('step-btn').addEventListener('click', stepSimulation);
+            document.getElementById('reset-btn').addEventListener('click', resetSimulation);
+            document.getElementById('demo-btn').addEventListener('click', runDemo);
+            document.getElementById('drop-data-btn').addEventListener('click', dropDataFrame);
+            document.getElementById('drop-ack-btn').addEventListener('click', dropAckFrame);
+            
+            // 初始化协议说明
+            updateProtocolDescription();
+        });
+
+        // 更新协议说明
+        function updateProtocolDescription() {
+            let description = '';
+            if(state.currentProtocol === 'stop-wait') {
+                description = `
+                    <p class="mb-2"><span class="font-medium">停止等待ARQ</span>：发送方每发送一帧后必须等待接收方的确认帧，才能发送下一帧。</p>
+                    <p class="mb-2"><span class="font-medium text-green-600">优点</span>：实现简单，控制逻辑简单。</p>
+                    <p><span class="font-medium text-red-600">缺点</span>：信道利用率低，尤其在传播延迟大的情况下。</p>
+                `;
+            } else if(state.currentProtocol === 'go-back-n') {
+                description = `
+                    <p class="mb-2"><span class="font-medium">返回N帧ARQ</span>：发送方可以连续发送多个帧，接收方采用累积确认。当发生错误时，发送方回退N个帧重传。</p>
+                    <p class="mb-2"><span class="font-medium text-green-600">优点</span>：信道利用率高，实现相对简单。</p>
+                    <p><span class="font-medium text-red-600">缺点</span>：错误发生时需要重传多个帧，效率较低。</p>
+                `;
+            } else if(state.currentProtocol === 'selective-repeat') {
+                description = `
+                    <p class="mb-2"><span class="font-medium">选择重传ARQ</span>：接收方可以缓存乱序到达的帧，发送方仅重传出错或丢失的帧，不需要回退重传。</p>
+                    <p class="mb-2"><span class="font-medium text-green-600">优点</span>：错误发生时只重传错误帧，效率最高。</p>
+                    <p><span class="font-medium text-red-600">缺点</span>：实现复杂，接收方需要缓存管理。</p>
+                `;
+            }
+            elements.protocolDescription.innerHTML = description;
+        }
+
+        // 开始仿真
+        function startSimulation() {
+            if (state.running) return;
+            
+            state.running = true;
+            state.paused = false;
+            state.startTime = Date.now();
+            
+            elements.currentState.textContent = "仿真运行中...";
+            elements.currentState.className = "text-center p-3 bg-blue-50 text-blue-700 rounded-lg";
+            
+            sendNextFrame();
+        }
+
+        // 暂停仿真
+        function pauseSimulation() {
+            if (!state.running) return;
+            
+            state.paused = true;
+            elements.currentState.textContent = "仿真已暂停";
+            elements.currentState.className = "text-center p-3 bg-yellow-50 text-yellow-700 rounded-lg";
+        }
+
+        // 单步仿真
+        function stepSimulation() {
+            if (!state.running || !state.paused) return;
+            
+            // 单步执行逻辑
+            sendNextFrame();
+        }
+
+        // 重置仿真
+        function resetSimulation() {
+            state.running = false;
+            state.paused = false;
+            state.nextSeq = 0;
+            state.baseSeq = 0;
+            state.ackExpected = 0;
+            state.frames = [];
+            state.acks = [];
+            state.sentFrames = 0;
+            state.receivedFrames = 0;
+            state.retransmittedFrames = 0;
+            
+            // 清除所有定时器
+            for (let timer in state.timers) {
+                clearTimeout(state.timers[timer]);
+                delete state.timers[timer];
+            }
+            
+            elements.framesContainer.innerHTML = '';
+            elements.windowState.innerHTML = '<div class="text-center text-gray-500">选择协议并开始仿真以查看窗口状态</div>';
+            elements.currentState.textContent = "系统准备就绪，请选择协议并开始仿真";
+            elements.currentState.className = "text-center p-3 bg-blue-50 text-blue-700 rounded-lg";
+            elements.progressFill.style.width = '0%';
+            elements.sentFrames.textContent = '0';
+            elements.receivedFrames.textContent = '0';
+            elements.retransmittedFrames.textContent = '0';
+            elements.throughput.textContent = '0';
+        }
+
+        // 运行演示
+        function runDemo() {
+            // 选择返回N帧ARQ
+            document.querySelectorAll('.protocol-btn').forEach(b => {
+                b.classList.remove('bg-primary', 'text-white');
+                b.classList.add('bg-gray-200');
+            });
+            document.getElementById('go-back-n-btn').classList.remove('bg-gray-200');
+            document.getElementById('go-back-n-btn').classList.add('bg-primary', 'text-white');
+            state.currentProtocol = 'go-back-n';
+            updateProtocolDescription();
+            
+            // 设置窗口大小为4
+            document.getElementById('window-size').value = 4;
+            state.windowSize = 4;
+            document.getElementById('window-size-value').textContent = '4';
+            
+            resetSimulation();
+            startSimulation();
+            
+            // 模拟在第3帧丢失
+            setTimeout(() => {
+                dropSpecificFrame(2);
+            }, 3500);
+        }
+
+        // 丢弃数据帧
+        function dropDataFrame() {
+            if (!state.running || state.paused) return;
+            
+            // 随机丢弃一帧
+            const frames = document.querySelectorAll('.frame:not(.lost)');
+            if (frames.length > 0) {
+                const randomIndex = Math.floor(Math.random() * frames.length);
+                const frame = frames[randomIndex];
+                frame.classList.add('lost');
+                frame.innerHTML = '<i class="fas fa-times"></i>';
+                
+                const seq = parseInt(frame.dataset.seq);
+                state.frames[seq].lost = true;
+                
+                // 更新状态
+                elements.currentState.textContent = `数据帧 #${seq} 丢失！`;
+                elements.currentState.className = "text-center p-3 bg-red-50 text-red-700 rounded-lg flash";
+                
+                // 更新窗口状态
+                updateWindowState();
+            }
+        }
+
+        // 丢弃特定帧（用于演示）
+        function dropSpecificFrame(seq) {
+            if (!state.running || state.paused) return;
+            
+            const frame = document.querySelector(`.frame[data-seq="${seq}"]`);
+            if (frame && !frame.classList.contains('lost')) {
+                frame.classList.add('lost');
+                frame.innerHTML = '<i class="fas fa-times"></i>';
+                state.frames[seq].lost = true;
+                
+                // 更新状态
+                elements.currentState.textContent = `数据帧 #${seq} 丢失！`;
+                elements.currentState.className = "text-center p-3 bg-red-50 text-red-700 rounded-lg flash";
+                
+                // 更新窗口状态
+                updateWindowState();
+            }
+        }
+
+        // 丢弃确认帧
+        function dropAckFrame() {
+            if (!state.running || state.paused) return;
+            
+            // 随机丢弃一个ACK
+            const acks = document.querySelectorAll('.ack:not(.lost)');
+            if (acks.length > 0) {
+                const randomIndex = Math.floor(Math.random() * acks.length);
+                const ack = acks[randomIndex];
+                ack.classList.add('lost');
+                ack.innerHTML = '<i class="fas fa-times"></i>';
+                
+                const seq = parseInt(ack.dataset.seq);
+                state.acks[seq].lost = true;
+                
+                // 更新状态
+                elements.currentState.textContent = `确认帧 #${seq} 丢失！`;
+                elements.currentState.className = "text-center p-3 bg-yellow-50 text-yellow-700 rounded-lg flash";
+                
+                // 更新窗口状态
+                updateWindowState();
+            }
+        }
+
+        // 发送下一帧
+        function sendNextFrame() {
+            if (!state.running || state.paused) return;
+            
+            // 检查窗口是否已满
+            if (state.nextSeq < state.baseSeq + state.windowSize) {
+                // 创建新帧
+                const frame = {
+                    seq: state.nextSeq,
+                    sentTime: Date.now(),
+                    acked: false,
+                    lost: false,
+                    retransmitted: false
+                };
+                
+                state.frames[state.nextSeq] = frame;
+                
+                // 创建帧元素
+                const frameEl = document.createElement('div');
+                frameEl.className = 'frame absolute top-1/3 w-12 h-12 bg-blue-500 text-white rounded-md flex items-center justify-center font-bold';
+                frameEl.textContent = frame.seq;
+                frameEl.dataset.seq = frame.seq;
+                frameEl.style.top = '30%';
+                frameEl.style.left = '100px';
+                elements.framesContainer.appendChild(frameEl);
+                
+                // 设置超时计时器
+                state.timers[`timeout_${frame.seq}`] = setTimeout(() => {
+                    handleTimeout(frame.seq);
+                }, state.timeout);
+                
+                // 更新统计信息
+                state.sentFrames++;
+                if (frame.retransmitted) {
+                    state.retransmittedFrames++;
+                }
+                elements.sentFrames.textContent = state.sentFrames;
+                elements.retransmittedFrames.textContent = state.retransmittedFrames;
+                
+                // 更新进度
+                const progress = Math.min(100, Math.floor((state.nextSeq + 1) / 15 * 100));
+                elements.progressFill.style.width = `${progress}%`;
+                
+                // 当帧到达接收方时
+                setTimeout(() => {
+                    if (!frame.lost) {
+                        frameEl.classList.add('hidden');
+                        receiveFrame(frame.seq);
+                    }
+                }, state.frameDelay);
+                
+                state.nextSeq++;
+                
+                // 更新窗口状态
+                updateWindowState();
+                
+                // 如果不是停止等待协议，继续发送帧
+                if (state.currentProtocol !== 'stop-wait') {
+                    if (state.nextSeq < 15 && state.nextSeq < state.baseSeq + state.windowSize) {
+                        setTimeout(sendNextFrame, 500);
+                    }
+                }
+            }
+        }
+
+        // 接收帧
+        function receiveFrame(seq) {
+            if (!state.running || state.paused) return;
+            
+            // 更新状态
+            state.receivedFrames++;
+            elements.receivedFrames.textContent = state.receivedFrames;
+            
+            // 计算吞吐量
+            const elapsed = (Date.now() - state.startTime) / 1000; // 秒
+            const throughput = elapsed > 0 ? (state.receivedFrames / elapsed).toFixed(2) : '0';
+            elements.throughput.textContent = throughput;
+            
+            // 发送ACK
+            sendAck(seq);
+        }
+
+        // 发送ACK
+        function sendAck(seq) {
+            if (!state.running || state.paused) return;
+            
+            // 创建ACK元素
+            const ack = {
+                seq: seq,
+                lost: false
+            };
+            
+            state.acks[seq] = ack;
+            
+            const ackEl = document.createElement('div');
+            ackEl.className = 'ack absolute top-2/3 w-10 h-10 bg-green-500 text-white rounded-full flex items-center justify-center font-bold';
+            ackEl.textContent = `ACK${seq}`;
+            ackEl.dataset.seq = seq;
+            ackEl.style.top = '70%';
+            ackEl.style.left = 'calc(100% - 200px)';
+            elements.framesContainer.appendChild(ackEl);
+            
+            // 当ACK到达发送方时
+            setTimeout(() => {
+                if (!ack.lost) {
+                    ackEl.classList.add('hidden');
+                    handleAck(seq);
+                }
+            }, state.frameDelay / 1.5);
+        }
+
+        // 处理ACK
+        function handleAck(seq) {
+            if (!state.running || state.paused) return;
+            
+            // 清除超时计时器
+            if (state.timers[`timeout_${seq}`]) {
+                clearTimeout(state.timers[`timeout_${seq}`]);
+                delete state.timers[`timeout_${seq}`];
+            }
+            
+            // 标记帧为已确认
+            if (state.frames[seq]) {
+                state.frames[seq].acked = true;
+            }
+            
+            // 根据协议更新baseSeq
+            if (state.currentProtocol === 'stop-wait') {
+                state.baseSeq = seq + 1;
+                if (state.nextSeq < 15) {
+                    state.nextSeq = state.baseSeq;
+                    sendNextFrame();
+                }
+            } else if (state.currentProtocol === 'go-back-n') {
+                state.baseSeq = seq + 1;
+                if (state.baseSeq === state.nextSeq && state.nextSeq < 15) {
+                    sendNextFrame();
+                } else if (state.baseSeq < state.nextSeq) {
+                    // 继续发送窗口中的帧
+                    // 在真实实现中，这里可能需要触发重传
+                }
+            } else if (state.currentProtocol === 'selective-repeat') {
+                // 修复选择重传协议的窗口滑动问题
+                // 标记该帧已确认
+                state.frames[seq].acked = true;
+                
+                // 检查是否有连续确认的帧
+                let newBase = state.baseSeq;
+                while (newBase < 15 && state.frames[newBase] && state.frames[newBase].acked) {
+                    newBase++;
+                }
+                state.baseSeq = newBase;
+                
+                // 尝试发送新帧
+                if (state.nextSeq < 15) {
+                    setTimeout(sendNextFrame, 10);
+                }
+            }
+            
+            // 更新窗口状态
+            updateWindowState();
+            
+            // 如果所有帧都已发送和确认，结束仿真
+            if (state.baseSeq >= 15) {
+                endSimulation();
+            }
+        }
+
+        // 处理超时
+        function handleTimeout(seq) {
+            if (!state.running || state.paused) return;
+            
+            // 更新状态
+            elements.currentState.textContent = `帧 #${seq} 超时未确认，触发重传`;
+            elements.currentState.className = "text-center p-3 bg-amber-50 text-amber-700 rounded-lg flash";
+            
+            // 标记为重传
+            state.frames[seq].retransmitted = true;
+            state.retransmittedFrames++;
+            elements.retransmittedFrames.textContent = state.retransmittedFrames;
+            
+            // 根据协议处理超时
+            if (state.currentProtocol === 'stop-wait') {
+                // 重传该帧
+                state.frames[seq].lost = false;
+                state.frames[seq].sentTime = Date.now();
+                
+                // 创建重传帧元素
+                const frameEl = document.createElement('div');
+                frameEl.className = 'frame absolute top-1/3 w-12 h-12 bg-amber-500 text-white rounded-md flex items-center justify-center font-bold flash';
+                frameEl.textContent = seq;
+                frameEl.dataset.seq = seq;
+                frameEl.style.top = '30%';
+                frameEl.style.left = '100px';
+                elements.framesContainer.appendChild(frameEl);
+                
+                // 设置超时计时器
+                state.timers[`timeout_${seq}`] = setTimeout(() => {
+                    handleTimeout(seq);
+                }, state.timeout);
+                
+                // 当帧到达接收方时
+                setTimeout(() => {
+                    if (!state.frames[seq].lost) {
+                        frameEl.classList.add('hidden');
+                        receiveFrame(seq);
+                    }
+                }, state.frameDelay);
+            } else if (state.currentProtocol === 'go-back-n') {
+                // 回退N帧重传
+                state.nextSeq = state.baseSeq;
+                for (let i = state.baseSeq; i <= seq; i++) {
+                    if (state.frames[i]) {
+                        state.frames[i].lost = false;
+                        state.frames[i].sentTime = Date.now();
+                        state.frames[i].retransmitted = true;
+                        
+                        // 创建重传帧元素
+                        const frameEl = document.createElement('div');
+                        frameEl.className = 'frame absolute top-1/3 w-12 h-12 bg-amber-500 text-white rounded-md flex items-center justify-center font-bold flash';
+                        frameEl.textContent = i;
+                        frameEl.dataset.seq = i;
+                        frameEl.style.top = '30%';
+                        frameEl.style.left = '100px';
+                        elements.framesContainer.appendChild(frameEl);
+                        
+                        // 设置超时计时器
+                        state.timers[`timeout_${i}`] = setTimeout(() => {
+                            handleTimeout(i);
+                        }, state.timeout);
+                        
+                        // 当帧到达接收方时
+                        setTimeout(() => {
+                            if (!state.frames[i].lost) {
+                                frameEl.classList.add('hidden');
+                                receiveFrame(i);
+                            }
+                        }, state.frameDelay);
+                    }
+                }
+                state.nextSeq = seq + 1;
+            } else if (state.currentProtocol === 'selective-repeat') {
+                // 仅重传该帧
+                state.frames[seq].lost = false;
+                state.frames[seq].sentTime = Date.now();
+                
+                // 创建重传帧元素
+                const frameEl = document.createElement('div');
+                frameEl.className = 'frame absolute top-1/3 w-12 h-12 bg-amber-500 text-white rounded-md flex items-center justify-center font-bold flash';
+                frameEl.textContent = seq;
+                frameEl.dataset.seq = seq;
+                frameEl.style.top = '30%';
+                frameEl.style.left = '100px';
+                elements.framesContainer.appendChild(frameEl);
+                
+                // 设置超时计时器
+                state.timers[`timeout_${seq}`] = setTimeout(() => {
+                    handleTimeout(seq);
+                }, state.timeout);
+                
+                // 当帧到达接收方时
+                setTimeout(() => {
+                    if (!state.frames[seq].lost) {
+                        frameEl.classList.add('hidden');
+                        receiveFrame(seq);
+                    }
+                }, state.frameDelay);
+            }
+            
+            // 更新窗口状态
+            updateWindowState();
+        }
+
+        // 更新窗口状态显示
+        function updateWindowState() {
+            let windowHtml = '<div class="flex flex-wrap justify-center">';
+            
+            // 计算窗口范围
+            const start = state.baseSeq;
+            const end = state.baseSeq + state.windowSize - 1;
+            
+            for (let i = start; i <= end; i++) {
+                let frameClass = 'window-frame';
+                let frameContent = i;
+                
+                if (i < state.nextSeq) {
+                    if (state.frames[i] && state.frames[i].acked) {
+                        frameClass += ' acked';
+                        frameContent = `<span class="text-green-600">${i}</span>`;
+                    } else if (state.frames[i] && state.frames[i].lost) {
+                        frameClass += ' lost';
+                        frameContent = `<span class="text-red-600">${i}</span>`;
+                    } else {
+                        frameClass += ' active';
+                    }
+                }
+                
+                if (i >= 15) {
+                    frameClass += ' opacity-50';
+                    frameContent = '';
+                }
+                
+                windowHtml += `<div class="${frameClass}">${frameContent}</div>`;
+            }
+            
+            windowHtml += '</div>';
+            
+            // 添加窗口信息
+            windowHtml += `<div class="mt-4 text-center text-sm text-gray-600">
+                发送窗口: [${state.baseSeq} - ${Math.min(end, 14)}] | 下一个序列号: ${state.nextSeq}
+            </div>`;
+            
+            elements.windowState.innerHTML = windowHtml;
+        }
+
+        // 结束仿真
+        function endSimulation() {
+            state.running = false;
+            elements.currentState.textContent = "数据传输完成！";
+            elements.currentState.className = "text-center p-3 bg-green-50 text-green-700 rounded-lg";
+            
+            // 计算吞吐量
+            const elapsed = (Date.now() - state.startTime) / 1000; // 秒
+            const throughput = elapsed > 0 ? (state.receivedFrames / elapsed).toFixed(2) : '0';
+            elements.throughput.textContent = throughput;
+        }
+    </script>
+</body>
+</html>
